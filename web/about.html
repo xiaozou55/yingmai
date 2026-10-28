@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>影脉 · 关于</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<main>
+  <h2 class="sec">关于影脉</h2>
+  <div class="card">
+    <p style="margin-top:0">影脉是一个影视人物合作关系与作品发现平台。它把公开的电影元数据与演职员记录整理成
+      「人物—作品」网络，再据此分析共同参与关系，为用户提供人物检索、关系探索与作品发现。</p>
+    <p style="margin-bottom:0"><b>平台中的「合作」仅指共同参与作品</b>，不代表私人友谊、直接对手戏或实际交流。
+      每一条关系都可以追溯到具体的作品和来源。</p>
+  </div>
+
+  <h2 class="sec">数据来源与署名</h2>
+  <div class="card">
+    <p style="margin-top:0">本平台使用 <b>TMDB</b> 公开接口数据。依据 TMDB 的使用要求，特此声明：</p>
+    <blockquote style="margin:12px 0;padding:11px 14px;border-left:3px solid var(--series-1);
+                       background:var(--surface-2);border-radius:0 8px 8px 0">
+      This product uses the TMDB API but is not endorsed or certified by TMDB.
+    </blockquote>
+    <p class="hint" style="margin-bottom:0">数据接口：<a class="link" href="https://developer.themoviedb.org/reference/movie-credits" target="_blank" rel="noopener">movie credits</a>
+      与 <a class="link" href="https://developer.themoviedb.org/reference/person-combined-credits" target="_blank" rel="noopener">person combined credits</a>。
+      非商业用途；商业用途须另行取得许可。</p>
+  </div>
+
+  <h2 class="sec">样本范围声明</h2>
+  <div class="card">
+    <ul style="margin:0;padding-left:20px;color:var(--text-secondary)">
+      <li><b>仅电影</b>，不包含电视剧、综艺。接口会同时返回电视剧记录，已在采集阶段过滤。</li>
+      <li><b>仅华语片</b>，即 TMDB 中 <code>original_language</code> 为 <code>zh</code>（国语）或
+        <code>cn</code>（粤语）的影片。TMDB 用 <code>cn</code> 标注粤语片，并非标准语言码。</li>
+      <li><b>以八位跨代际演员为种子</b>（成龙、洪金宝、刘德华、梁朝伟、张曼玉、周星驰、吴京、易烊千玺）
+        选取其作品全集，再按「稠密优先 + 热度补足」取 200 部。</li>
+      <li><b>图谱节点</b>按每部电影前 10 位主演加导演取样，其余演职员保留明细但不参与关系计算。</li>
+      <li>年份按<b>发行年</b>统计，<b>不代表实际拍摄时间</b>。</li>
+    </ul>
+    <p class="hint">因此：某位人物的网络指标只反映<b>当前样本内</b>的情况，不代表其在行业中的地位；
+      路径查找「未找到」只表示当前样本与条件下没有找到，不代表现实中无关联。</p>
+  </div>
+
+  <h2 class="sec">计算规则</h2>
+  <div class="card">
+    <ul style="margin:0;padding-left:20px;color:var(--text-secondary)">
+      <li>人物与电影按 TMDB 源 ID 关联，姓名只作展示与检索，<b>不因重名合并</b>。</li>
+      <li>同一人在同一部电影中担任多个职务时保留明细，但<b>每对人物每部电影只计一次</b>。</li>
+      <li>合作边为<b>无向边</b>，频次为共同出演的电影数，排除自连接。</li>
+      <li>推荐基于合作者与类型偏好生成，<b>不生成事实关系</b>；缺少中文名称时回退原名，不猜测翻译。</li>
+    </ul>
+  </div>
+
+  <h2 class="sec">数据快照</h2>
+  <div class="kpis" id="kpis"></div>
+</main>
+<footer class="foot" id="foot"></footer>
+
+<script src="app.js"></script>
+<script>
+boot('about.html');
+api('/api/stats').then(s => {
+  $('#kpis').innerHTML = [
+    [s.movies, '部电影'], [s.persons, '位人物'], [s.credits, '条演职员记录'],
+    [s.graph_nodes, '个图谱节点'], [s.graph_edges, '条合作边'],
+    [`${s.year_min}–${s.year_max}`, '年份跨度'],
+  ].map(([v, k]) => `<div class="kpi"><div class="v">${v}</div><div class="k">${k}</div></div>`).join('');
+  $('#foot').textContent = `数据来源 ${s.source}　·　${s.scope}`;
+}).catch(e => failed($('#kpis'), e));
+</script>
+</body>
+</html>

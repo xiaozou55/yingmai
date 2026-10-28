@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>影脉 · 登录</title>
+<link rel="stylesheet" href="style.css">
+<script src="lib/echarts.min.js"></script>
+</head>
+<body class="auth">
+
+<button class="themebtn" id="themeBtn" title="切换深浅色">◐ 主题</button>
+
+<div class="authwrap">
+  <!-- 左：品牌区，背景是真实的合作图谱 -->
+  <aside class="authbrand">
+    <div class="mark">影脉</div>
+    <p class="tagline">影视人物合作关系与作品发现平台</p>
+    <div class="fig" id="mini"></div>
+    <p class="fact" id="fact">正在读取数据…</p>
+    <div class="authstats" id="stats"></div>
+  </aside>
+
+  <!-- 右：表单 -->
+  <section class="authform">
+    <h2 id="title">欢迎回来</h2>
+    <p class="sub" id="sub">登录后可以收藏片单、标记看过、给推荐反馈</p>
+
+    <div class="modes">
+      <button data-m="login" class="on">登录</button>
+      <button data-m="register">注册</button>
+    </div>
+
+    <div class="field">
+      <label for="u">用户名</label>
+      <input id="u" autocomplete="username" placeholder="2–32 个字符">
+    </div>
+    <div class="field">
+      <label for="p">密码</label>
+      <div class="pwwrap">
+        <input id="p" type="password" autocomplete="current-password" placeholder="至少 6 位">
+        <button type="button" class="eye" id="eye">显示</button>
+      </div>
+    </div>
+    <button class="primary" id="go">登录</button>
+    <div class="msg" id="msg"></div>
+
+    <p class="alt"><a href="index.html">先随便逛逛 →</a>　不登录也能检索人物、看合作图谱</p>
+    <p class="tip">密码经 PBKDF2 加盐哈希后存储，收藏与反馈按用户隔离。</p>
+  </section>
+</div>
+
+<script src="app.js"></script>
+<script>
+// 登录页不挂顶栏，只保留主题切换
+initTheme();
+$('#themeBtn').onclick = () => {
+  const cur = document.documentElement.dataset.theme
+    || (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+  const next = cur === 'dark' ? 'light' : 'dark';
+  document.documentElement.dataset.theme = next;
+  localStorage.setItem('ym-theme', next);
+  location.reload();
+};
+
+const next = new URLSearchParams(location.search).get('next') || 'index.html';
+let mode = 'login';
+
+// 已经登录过就直接进去
+if (localStorage.getItem('ym-token')) {
+  apiAuth('/api/me').then(m => { if (m.logged_in) location.href = next; }).catch(() => {});
+}
+
+/* ---------- 左侧：真实数据 ---------- */
+async function loadBrand() {
+  try {
+    const s = await api('/api/stats');
+    $('#stats').innerHTML = [
+      [s.movies, '部华语电影'], [s.graph_nodes, '位图谱人物'], [s.graph_edges, '条合作关系'],
+    ].map(([v, k]) => `<div><b>${v}</b>${k}</div>`).join('');
+
+    const h = await api('/api/highlight');
+    if (!h.found) { $('#fact').textContent = '每一段合作都能追溯到具体作品。'; return; }
+    $('#fact').innerHTML =
+      `<b>${esc(h.a.name)}</b> 与 <b>${esc(h.b.name)}</b> 共同出演 <b>${h.weight}</b> 部电影`
+      + (h.first ? `，从 ${h.first} 年到 ${h.last} 年` : '')
+      + `。<br>点开任意一条连线，都能看到是哪些作品支撑的。`;
+
+    // 以这对组合为中心画一张小图
+    const g = await api('/api/graph', { person_id: h.a.id, hops: 2, min_weight: 2, limit: 70 });
+    drawMini(g, h.a.id);
+  } catch (e) {
+    $('#fact').textContent = '数据加载失败，不影响登录。';
+  }
+}
+
+function drawMini(g, focus) {
+  const t = theme();
+  const maxDeg = Math.max(1, ...g.nodes.map(n => n.degree));
+  const chart = echarts.init($('#mini'), null, { renderer: 'canvas' });
+  chart.setOption({
+    backgroundColor: 'transparent',
+    animationDuration: 500,
+    tooltip: { show: false },
+    series: [{
+      type: 'graph', layout: 'force', roam: false, silent: true,
+      left: 30, top: 40, right: 30, bottom: 30,
+      force: { repulsion: 300, edgeLength: [36, 130], gravity: 0.12, friction: 0.28 },
+      data: g.nodes.map(n => {
+        const base = 5 + 15 * Math.sqrt(n.degree / maxDeg);
+        return {
+          id: String(n.id), name: n.name,
+          // 聚焦的那位给个下限，否则低度数时它在图里几乎看不见
+          symbolSize: n.id === focus ? Math.max(base, 18) : base,
+          itemStyle: {
+            color: n.id === focus ? t.s1 : t.neutral,
+            opacity: n.id === focus ? 1 : 0.5,
+            borderColor: t.surface, borderWidth: n.id === focus ? 2.5 : 1.5,
+          },
+        };
+      }),
+      links: g.edges.map(e => ({
+        source: String(e.source), target: String(e.target),
+        lineStyle: { width: 0.4 + Math.min(e.weight, 8) * 0.25, color: t.base, opacity: .3 },
+      })),
+      label: {
+        show: true, position: 'right', color: t.sub, fontSize: 10.5,
+        formatter: p => p.data.symbolSize >= 13 ? p.name : '',
+      },
+      labelLayout: { hideOverlap: true },
+      lineStyle: { curveness: 0.08 },
+    }],
+  });
+  window.addEventListener('resize', () => chart.resize());
+}
+loadBrand();
+
+/* ---------- 右侧：表单 ---------- */
+function render() {
+  const isLogin = mode === 'login';
+  $('#title').textContent = isLogin ? '欢迎回来' : '创建账号';
+  $('#sub').textContent = isLogin
+    ? '登录后可以收藏片单、标记看过、给推荐反馈'
+    : '注册后可以收藏片单、标记看过、给推荐反馈';
+  $('#go').textContent = isLogin ? '登录' : '注册并登录';
+  $('#p').setAttribute('autocomplete', isLogin ? 'current-password' : 'new-password');
+  $$('.modes button').forEach(b => b.classList.toggle('on', b.dataset.m === mode));
+  $('#msg').textContent = '';
+}
+$$('.modes button').forEach(b => b.onclick = () => { mode = b.dataset.m; render(); $('#u').focus(); });
+render();
+
+$('#eye').onclick = () => {
+  const p = $('#p'), on = p.type === 'password';
+  p.type = on ? 'text' : 'password';
+  $('#eye').textContent = on ? '隐藏' : '显示';
+};
+
+async function submit() {
+  const username = $('#u').value.trim(), password = $('#p').value;
+  const msg = $('#msg');
+  const say = (cls, text) => { msg.className = 'msg ' + cls; msg.textContent = text; };
+  if (username.length < 2) return say('err', '用户名至少 2 个字符');
+  if (password.length < 6) return say('err', '密码至少 6 位');
+
+  const btn = $('#go');
+  btn.disabled = true;
+  say('', mode === 'login' ? '正在登录…' : '正在创建账号…');
+  try {
+    const d = await apiAuth('/api/auth/' + (mode === 'login' ? 'login' : 'register'),
+                            { method: 'POST', body: { username, password } });
+    auth.token = d.token;
+    say('ok', '成功，正在进入…');
+    location.href = next;
+  } catch (e) {
+    say('err', e.message);
+    btn.disabled = false;
+    $('#p').select();
+  }
+}
+$('#go').onclick = submit;
+$('#u').addEventListener('keydown', e => { if (e.key === 'Enter') $('#p').focus(); });
+$('#p').addEventListener('keydown', e => { if (e.key === 'Enter') submit(); });
+$('#u').focus();
+</script>
+</body>
+</html>

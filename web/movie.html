@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>影脉 · 作品详情</title>
+<link rel="stylesheet" href="style.css">
+<script src="lib/echarts.min.js"></script>
+</head>
+<body>
+<main>
+  <div id="head"></div>
+  <div class="card" id="castCard" style="margin-top:14px"><h3>演职员</h3><div id="cast"></div></div>
+  <div class="card" id="crewCard" style="margin-top:14px"><h3>主创人员</h3><div id="crew"></div></div>
+  <div class="card" id="fixCard" style="margin-top:14px"><div id="fix"></div></div>
+</main>
+<footer class="foot" id="foot"></footer>
+
+<script src="app.js"></script>
+<script>
+boot('movie.html');
+const id = +new URLSearchParams(location.search).get('id');
+if (!id) show($('#head'), '<div class="err">缺少作品 id</div>'); else load();
+
+async function load() {
+  loading($('#head'));
+  try {
+    const d = await api('/api/movie/' + id);
+    const m = d.movie;
+    document.title = `影脉 · ${m.title}`;
+    show($('#head'), `<h2 class="sec">${esc(m.title)}</h2>
+      <div class="grid c2" style="align-items:start">
+        <div class="card" style="display:flex;gap:16px">
+          ${m.poster_path ? `<img src="${poster(m.poster_path)}" alt="" style="width:150px;border-radius:10px;flex:0 0 auto">` : ''}
+          <div>
+            <p style="margin:0 0 8px">${[m.original_title !== m.title ? m.original_title : '',
+              m.release_date || '', m.runtime ? m.runtime + ' 分钟' : ''].filter(Boolean).map(esc).join('　·　')}</p>
+            <p style="margin:0 0 8px">${m.genres.map(g => `<span class="tag">${esc(g)}</span>`).join(' ')}</p>
+            <p class="hint" style="margin:0 0 6px">语言：${m.original_language === 'cn' ? '粤语' : m.original_language === 'zh' ? '国语' : esc(m.original_language || '未知')}
+              ${m.origin_country.length ? '　出品：' + m.origin_country.map(esc).join('、') : ''}</p>
+            <p class="hint" style="margin:0 0 6px">${m.vote_count ? `TMDB 评价 ${m.vote_count} 条，均分 ${(m.vote_average || 0).toFixed(1)}` : ''}</p>
+            <p class="hint" style="margin:0 0 10px">种子命中：${m.seed_hits} 位种子人物参演</p>
+            <div id="favArea">${favButtons(m.id)}</div>
+          </div>
+        </div>
+        <div class="card">
+          <h3>简介</h3>
+          <p style="margin:0;color:var(--text-secondary)">${esc(m.overview || '暂无简介')}</p>
+        </div>
+      </div>`);
+
+    const top = d.cast.slice(0, 10);
+    const rest = d.cast.slice(10);
+    $('#cast').innerHTML = `
+      <table><thead><tr><th>番位</th><th>姓名</th><th>角色</th></tr></thead><tbody>
+      ${top.map(c => `<tr><td class="num">${(c.billing_order ?? 0) + 1}</td>
+        <td><a class="link" href="person.html?id=${c.id}">${esc(c.name)}</a></td>
+        <td>${esc(c.character_name || '—')}</td></tr>`).join('')}
+      </tbody></table>
+      ${rest.length ? `<details class="tv"><summary>其余 ${rest.length} 位（不计入合作图谱）</summary>
+        <table><tbody>${rest.map(c => `<tr><td class="num">${(c.billing_order ?? 0) + 1}</td>
+          <td><a class="link" href="person.html?id=${c.id}">${esc(c.name)}</a></td>
+          <td>${esc(c.character_name || '—')}</td></tr>`).join('')}</tbody></table></details>` : ''}`;
+
+    $('#crew').innerHTML = d.crew.length ? `
+      <table><thead><tr><th>姓名</th><th>职务</th><th>部门</th></tr></thead><tbody>
+      ${d.crew.map(c => `<tr><td><a class="link" href="person.html?id=${c.id}">${esc(c.name)}</a></td>
+        <td>${esc(c.job || '—')}</td><td>${esc(c.department || '—')}</td></tr>`).join('')}
+      </tbody></table>` : '<div class="empty">没有主创记录</div>';
+
+    $('#foot').textContent = `数据来源 TMDB · 抓取于 ${(m.fetched_at || '').slice(0, 10)}　本平台使用 TMDB 接口数据，但未获 TMDB 认可或认证。`;
+    bindFav($('#favArea'));
+
+    // F28 纠错入口
+    $('#fix').innerHTML = correctionEntry('movie', m.id, ['title', 'original_title', 'release_year']);
+    bindCorrection($('#fix'));
+  } catch (e) {
+    // 取不到就整页收起，别留下两个空卡片
+    failed($('#head'), e);
+    $('#castCard').style.display = 'none';
+    $('#crewCard').style.display = 'none';
+  }
+}
+</script>
+</body>
+</html>

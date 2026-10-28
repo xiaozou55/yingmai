@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>影脉 · 我的片单</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<main>
+  <h2 class="sec">我的片单</h2>
+  <p class="hint">标记为「看过」的作品会从作品推荐中排除（F17 验收要求）。</p>
+
+  <div class="filters">
+    <div class="field"><label for="lt">列表</label>
+      <select id="lt"><option value="">全部</option><option value="want">想看的</option>
+        <option value="seen">看过的</option></select></div>
+    <button class="primary" id="go">刷新</button>
+  </div>
+
+  <div class="card"><div id="out"></div></div>
+
+  <h2 class="sec">操作记录</h2>
+  <div class="card"><div id="log"></div></div>
+</main>
+<footer class="foot" id="foot"></footer>
+
+<script src="app.js"></script>
+<script>
+boot('favorites.html');
+
+if (!localStorage.getItem('ym-token')) {
+  location.href = 'login.html?next=' + encodeURIComponent('favorites.html');
+}
+
+const out = $('#out');
+
+async function load() {
+  loading(out);
+  try {
+    const d = await apiAuth('/api/favorites' + ($('#lt').value ? '?list_type=' + $('#lt').value : ''));
+    if (!d.count) return show(out, '<div class="empty">这个列表还是空的。在作品页点「想看的」或「看过的」就会出现在这里。</div>');
+    show(out, `<table><thead><tr><th>片名</th><th>年份</th><th>类型</th><th>列表</th><th></th></tr></thead>
+      <tbody>${d.items.map(m => `<tr>
+        <td><a class="link" href="movie.html?id=${m.movie_id}">${esc(m.title)}</a></td>
+        <td>${m.release_year || '—'}</td>
+        <td>${m.genres.join('、') || '—'}</td>
+        <td><span class="tag">${m.list_type === 'seen' ? '看过的' : '想看的'}</span></td>
+        <td><button class="fav" data-m="${m.movie_id}" data-t="${m.list_type}">移除</button></td>
+      </tr>`).join('')}</tbody></table>`);
+    $$('.fav', out).forEach(b => b.onclick = async () => {
+      b.disabled = true;
+      try {
+        await apiAuth(`/api/favorites/${b.dataset.m}?list_type=${b.dataset.t}`, { method: 'DELETE' });
+        refreshAuth(); load(); loadLog();
+      } catch (e) { alert('移除失败：' + e.message); b.disabled = false; }
+    });
+  } catch (e) {
+    if (/401|登录/.test(e.message)) { location.href = 'login.html?next=favorites.html'; return; }
+    failed(out, e);
+  }
+}
+
+async function loadLog() {
+  try {
+    const d = await apiAuth('/api/auth/log?limit=20');
+    show($('#log'), d.count ? `<table><thead><tr><th>操作</th><th>对象</th><th>时间</th></tr></thead>
+      <tbody>${d.entries.map(e => `<tr><td>${esc(e.action)}</td><td>${esc(e.detail || '—')}</td>
+        <td>${esc(e.at)}</td></tr>`).join('')}</tbody></table>`
+      : '<div class="empty">还没有操作记录</div>');
+  } catch (e) { failed($('#log'), e); }
+}
+
+$('#go').onclick = load;
+load();
+loadLog();
+</script>
+</body>
+</html>

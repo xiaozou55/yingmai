@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>影脉 · 人物档案</title>
+<link rel="stylesheet" href="style.css">
+<script src="lib/echarts.min.js"></script>
+</head>
+<body>
+<main>
+  <div id="head"></div>
+
+  <div class="kpis" id="kpis"></div>
+
+  <div class="grid c2" style="margin-top:14px">
+    <div class="card"><h3>合作时间线</h3><div id="tl" class="chart h280"></div>
+      <p class="hint">按作品发行年统计，不代表实际拍摄时间。</p></div>
+    <div class="card"><h3>合作对象排序</h3><div id="freq" class="chart h280"></div>
+      <p class="hint">按共同出演的电影部数排序，同一部电影只计一次。</p></div>
+  </div>
+
+  <div class="card" style="margin-top:14px">
+    <h3>参演作品（仅本样本内的 200 部）</h3>
+    <p class="hint" style="margin:-6px 0 10px">该人物的完整作品数可能更多；这里只列出属于当前样本的电影。</p>
+    <div id="works"></div>
+  </div>
+
+  <div class="card" id="fixCard" style="margin-top:14px"><div id="fix"></div></div>
+
+  <div class="card" style="margin-top:14px">
+    <h3>作品推荐</h3>
+    <p class="hint" id="recHint" style="margin:-4px 0 10px"></p>
+    <div id="rec"></div>
+  </div>
+</main>
+<footer class="foot" id="foot"></footer>
+
+<script src="app.js"></script>
+<script>
+boot('person.html');
+const id = +new URLSearchParams(location.search).get('id');
+const out = $('#head');
+if (!id) { show(out, '<div class="err">缺少人物 id</div>'); }
+else load();
+
+async function load() {
+  loading(out);
+  try {
+    const d = await api('/api/person/' + id);
+    const p = d.person;
+    const years = d.works.map(w => w.release_year).filter(Boolean);
+    document.title = `影脉 · ${p.name}`;
+    show(out, `<h2 class="sec" style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+      ${p.profile_path ? `<img class="avatar" style="width:56px;height:56px;border-radius:12px" src="${profile(p.profile_path)}" alt="">` : ''}
+      <span>${esc(p.name)}</span>
+      ${d.in_graph ? '' : '<span class="tag">不在图谱范围内</span>'}
+    </h2>
+    <p class="hint">${[p.known_for_department, p.birthday ? '生于 ' + p.birthday : '',
+      p.deathday ? '卒于 ' + p.deathday : '', p.place_of_birth].filter(Boolean).map(esc).join('　·　')}</p>
+    ${p.aka?.length ? `<p class="hint">别名：${p.aka.map(esc).join('、')}</p>` : ''}
+    <p class="hint"><a class="link" href="graph.html?id=${p.id}">在合作图谱中查看 →</a></p>`);
+
+    $('#kpis').innerHTML = [
+      [d.works.length, '部参演作品'],
+      [d.top_collaborators.length, '位主要合作者（前 30）'],
+      [years.length ? Math.min(...years) + '–' + Math.max(...years) : '—', '活跃年份'],
+      [d.works.filter(w => w.job === 'Director').length, '部导演作品'],
+    ].map(([v, k]) => `<div class="kpi"><div class="v">${v}</div><div class="k">${k}</div></div>`).join('');
+
+    // F13 合作时间线
+    const tl = await api('/api/timeline/' + id);
+    const tls = fillYears(tl.works_by_year.map(r => [r.y, r.n]));
+    if (tls.years.length) {
+      timeSeries($('#tl'), tls.years, tls.values, { unit: '部作品', kind: 'line' });
+    } else show($('#tl'), '<div class="empty">没有可用的年份数据</div>');
+
+    // F09 合作对象排序（只画前 15 位，避免行数过多把标注挤在一起）
+    if (d.top_collaborators.length) {
+      hBar($('#freq'), d.top_collaborators.slice(0, 15).map(c => ({ n: c.name, v: c.weight })),
+           { unit: ' 部', digits: 0 });
+    } else show($('#freq'), '<div class="empty">该人物在当前样本内没有合作边</div>');
+
+    // F04 作品列表
+    // 同一人在同片担任多个职务会有多行，这里按电影去重
+    const byMovie = new Map();
+    for (const w of d.works) {
+      const cur = byMovie.get(w.id);
+      if (cur) { cur.jobs.push(w.job); cur.chars.push(w.character_name); }
+      else byMovie.set(w.id, { ...w, jobs: [w.job], chars: [w.character_name] });
+    }
+    const works = [...byMovie.values()];
+    $('#works').innerHTML = works.length ? `
+      <table><thead><tr><th>片名</th><th>年份</th><th>职务</th><th>角色</th><th>类型</th><th>收藏</th></tr></thead>
+      <tbody>${works.map(w => `<tr>
+        <td><a class="link" href="movie.html?id=${w.id}">${esc(w.title)}</a></td>
+        <td>${w.release_year || '—'}</td>
+        <td>${w.jobs.filter(Boolean).map(esc).join('、') || '—'}</td>
+        <td>${w.chars.filter(Boolean).map(esc).join('、') || '—'}</td>
+        <td>${w.genres.join('、') || '—'}</td>
+        <td>${favButtons(w.id)}</td></tr>`).join('')}
+      </tbody></table>` : '<div class="empty">没有作品记录</div>';
+    bindFav($('#works'));
+    $('#fix').innerHTML = correctionEntry('person', p.id, ['name']);
+    bindCorrection($('#fix'));
+
+    // F17 作品推荐（带上登录态，好排除用户标记为「看过」的作品）
+    let r;
+    try { r = await apiAuth(`/api/recommend/${id}?limit=12`); }
+    catch { r = await api('/api/recommend/' + id, { limit: 12 }); }
+    $('#recHint').innerHTML = `基于该人物合作者的作品与类型偏好。已排除其本人参演的 <b>${r.excluded_own_works}</b> 部`
+      + (r.excluded_my_seen
+          ? `，你标记为「看过」的 <b>${r.excluded_my_seen}</b> 部`
+          : `。<a class="link" href="login.html">登录</a>后标记「看过」的作品也会被排除`)
+      + (r.excluded_disliked ? `，以及你点过「不感兴趣」的 <b>${r.excluded_disliked}</b> 部` : '')
+      + (r.liked_count ? `；你点过「喜欢」的 <b>${r.liked_count}</b> 部的类型会获得加分` : '')
+      + `。推荐不生成事实关系。`;
+    $('#rec').innerHTML = r.results.length ? `
+      <table><thead><tr><th>片名</th><th>年份</th><th>类型</th><th>推荐依据</th><th>反馈</th></tr></thead>
+      <tbody>${r.results.map(x => `<tr>
+        <td><a class="link" href="movie.html?id=${x.id}">${esc(x.title)}</a></td>
+        <td>${x.release_year || '—'}</td><td>${x.genres.join('、') || '—'}</td>
+        <td>与 ${x.why.map(esc).join('、')} 合作${x.genre_hit.length ? '；同属' + x.genre_hit.map(esc).join('、') : ''}
+          ${x.like_hit?.length ? `<div style="color:var(--muted);font-size:12px">你喜欢的类型：${x.like_hit.map(esc).join('、')}</div>` : ''}</td>
+        <td><div class="favrow">
+          <button class="fav fb" data-m="${x.id}" data-a="like">喜欢</button>
+          <button class="fav fb" data-m="${x.id}" data-a="dislike">不感兴趣</button>
+        </div></td></tr>`).join('')}
+      </tbody></table>` : '<div class="empty">没有可推荐的候选作品</div>';
+    bindFeedback($('#rec'));
+
+    $('#foot').textContent = '本平台使用 TMDB 接口数据，但未获 TMDB 认可或认证。合作仅指共同参与作品，不代表私人友谊或直接对手戏。';
+  } catch (e) { failed(out, e); }
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>影脉 · 管理</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<main>
+  <h2 class="sec">纠错管理</h2>
+  <p class="hint">用户提交的纠错带来源证据；管理员复核后接受或驳回。接受的更正会写入数据并保留原值作为版本记录。</p>
+  <div class="filters">
+    <div class="field"><label for="st">状态</label>
+      <select id="st"><option value="pending">待复核</option><option value="accepted">已接受</option>
+        <option value="rejected">已驳回</option><option value="">全部</option></select></div>
+    <button class="primary" id="crefresh">刷新</button>
+    <span class="hint" id="cstat" style="margin-left:auto"></span>
+  </div>
+  <div class="card"><div id="corr"></div></div>
+
+  <h2 class="sec">数据备份</h2>
+  <p class="hint">快照含数据库副本与清单（行数、校验和）。<b>恢复走命令行</b>：服务本身占着数据库，边跑边覆盖自己不安全。</p>
+  <div class="filters">
+    <div class="field" style="flex:1;min-width:220px"><label for="bnote">备注</label>
+      <input id="bnote" placeholder="例如：完成 200 部采集后"></div>
+    <button class="primary" id="bcreate">创建快照</button>
+  </div>
+  <div class="card"><div id="backups"></div></div>
+
+  <h2 class="sec">增量同步记录</h2>
+  <p class="hint">按 TMDB 的 /movie/changes 找出源站变动过的条目，只重取它们再重算关系。</p>
+  <div class="card"><div id="syncs"></div></div>
+
+  <h2 class="sec">我的操作记录</h2>
+  <div class="card"><div id="mylog"></div></div>
+</main>
+<footer class="foot" id="foot"></footer>
+
+<script src="app.js"></script>
+<script>
+boot('admin.html');
+$('#foot').textContent = '本平台使用 TMDB 接口数据，但未获 TMDB 认可或认证。';
+
+const isAdmin = () => auth.user && auth.user.role === 'admin';
+
+/* ---------- F28 纠错 ---------- */
+async function loadCorr() {
+  loading($('#corr'));
+  try {
+    const d = await api('/api/corrections' + ($('#st').value ? '?status=' + $('#st').value : ''));
+    $('#cstat').textContent = Object.entries(d.by_status).map(([k, v]) =>
+      `${({ pending: '待复核', accepted: '已接受', rejected: '已驳回' })[k] || k} ${v}`).join('　·　') || '暂无记录';
+    if (!d.count) return show($('#corr'), '<div class="empty">这个状态下没有纠错记录。</div>');
+    show($('#corr'), `<table><thead><tr><th>编号</th><th>目标</th><th>字段</th>
+        <th>原值 → 更正为</th><th>来源 / 说明</th><th>提交人</th><th>状态</th><th></th></tr></thead>
+      <tbody>${d.items.map(c => `<tr>
+        <td>#${c.id}</td>
+        <td><a class="link" href="${c.target_type === 'movie' ? 'movie.html?id=' : 'person.html?id='}${c.target_id}">
+          ${esc(c.movie_title || c.person_name || c.target_type + ':' + c.target_id)}</a></td>
+        <td><code>${esc(c.field)}</code></td>
+        <td>${esc(c.old_value ?? '—')} <b>→</b> ${esc(c.new_value)}</td>
+        <td>${c.source_url ? `<a class="link" href="${esc(c.source_url)}" target="_blank" rel="noopener">来源</a>` : ''}
+            ${c.reason ? `<div class="meta" style="color:var(--muted);font-size:12px">${esc(c.reason)}</div>` : ''}</td>
+        <td>${esc(c.submitter || '—')}</td>
+        <td><span class="tag">${({ pending: '待复核', accepted: '已接受', rejected: '已驳回' })[c.status] || c.status}</span>
+            ${c.review_note ? `<div style="color:var(--muted);font-size:12px">${esc(c.review_note)}</div>` : ''}</td>
+        <td>${c.status === 'pending' && isAdmin() ? `
+          <button class="fav" data-id="${c.id}" data-a="accept">接受</button>
+          <button class="fav" data-id="${c.id}" data-a="reject">驳回</button>` : ''}</td>
+      </tr>`).join('')}</tbody></table>`);
+    $$('button[data-a]', $('#corr')).forEach(b => b.onclick = async () => {
+      const note = prompt(b.dataset.a === 'accept' ? '接受理由（可留空）' : '驳回理由（可留空）') ?? '';
+      b.disabled = true;
+      try {
+        await apiAuth(`/api/corrections/${b.dataset.id}/review`,
+                      { method: 'POST', body: { action: b.dataset.a, note } });
+        loadCorr();
+      } catch (e) { alert('操作失败：' + e.message); b.disabled = false; }
+    });
+  } catch (e) { failed($('#corr'), e); }
+}
+$('#crefresh').onclick = loadCorr;
+loadCorr();
+// 登录态就绪后重画一次，管理员才会出现「接受 / 驳回」按钮
+if (window.authReady) window.authReady.then(loadCorr);
+
+/* ---------- F30 备份 ---------- */
+async function loadBackups() {
+  loading($('#backups'));
+  try {
+    const d = await api('/api/backups');
+    if (!d.items.length) return show($('#backups'),
+      '<div class="empty">还没有快照。上面填个备注点「创建快照」。</div>');
+    show($('#backups'), `<table><thead><tr><th>快照</th><th>大小</th><th>创建时间</th>
+        <th>备注</th><th></th></tr></thead><tbody>${d.items.map(s => `<tr>
+        <td><code>${esc(s.name)}</code></td>
+        <td class="num">${(s.size / 1024).toFixed(0)} KB</td>
+        <td>${esc(s.created_at)}</td><td>${esc(s.note || '—')}</td>
+        <td>${isAdmin() ? `<button class="fav" data-n="${esc(s.name)}">校验</button>` : ''}</td>
+      </tr>`).join('')}</tbody></table>
+      <p class="hint">恢复：<code>cd pipeline && python backup.py restore &lt;快照名&gt;</code>（会先自动备份当前库）</p>`);
+    $$('button[data-n]', $('#backups')).forEach(b => b.onclick = async () => {
+      b.disabled = true;
+      try {
+        const r = await apiAuth(`/api/backups/${encodeURIComponent(b.dataset.n)}/verify`, { method: 'POST' });
+        alert(r.log || (r.ok ? '校验通过' : '校验未通过'));
+      } catch (e) { alert('校验失败：' + e.message); }
+      b.disabled = false;
+    });
+  } catch (e) { failed($('#backups'), e); }
+}
+
+$('#bcreate').onclick = async () => {
+  if (!isAdmin()) { alert('需要管理员权限'); return; }
+  $('#bcreate').disabled = true;
+  try {
+    const r = await apiAuth('/api/backups?note=' + encodeURIComponent($('#bnote').value), { method: 'POST' });
+    $('#bnote').value = '';
+    loadBackups();
+    alert(r.name ? '快照已创建：' + r.name : '创建失败');
+  } catch (e) { alert('创建失败：' + e.message); }
+  $('#bcreate').disabled = false;
+};
+loadBackups();
+if (window.authReady) window.authReady.then(loadBackups);
+
+/* ---------- F24 同步记录 ---------- */
+async function loadSyncs() {
+  loading($('#syncs'));
+  try {
+    const d = await api('/api/syncs');
+    if (!d.count) return show($('#syncs'),
+      '<div class="empty">还没有同步记录。在 pipeline 下跑 <code>python collect.py update</code>。</div>');
+    show($('#syncs'), `<table><thead><tr><th>#</th><th>检查区间</th><th class="num">检查</th>
+        <th class="num">变动</th><th class="num">明细 +/-</th><th class="num">合作边</th><th>完成时间</th></tr></thead>
+      <tbody>${d.items.map(s => `<tr><td>${s.id}</td>
+        <td>${esc(s.range_from)} → ${esc(s.range_to)}</td>
+        <td class="num">${s.movies_checked}</td><td class="num">${s.movies_changed}</td>
+        <td class="num">+${s.credits_added} / -${s.credits_removed}</td>
+        <td class="num">${s.edges_before} → ${s.edges_after}</td>
+        <td>${esc(s.finished_at || '')}</td></tr>`).join('')}</tbody></table>`);
+  } catch (e) { failed($('#syncs'), e); }
+}
+loadSyncs();
+
+/* ---------- F29 我的操作记录 ---------- */
+async function loadMyLog() {
+  if (!auth.user) return show($('#mylog'), '<div class="empty">登录后可以看到自己的操作记录。</div>');
+  try {
+    const d = await apiAuth('/api/auth/log?limit=30');
+    show($('#mylog'), d.count ? `<table><thead><tr><th>操作</th><th>对象</th><th>时间</th></tr></thead>
+      <tbody>${d.entries.map(e => `<tr><td>${esc(e.action)}</td><td>${esc(e.detail || '—')}</td>
+        <td>${esc(e.at)}</td></tr>`).join('')}</tbody></table>`
+      : '<div class="empty">还没有操作记录</div>');
+  } catch (e) { failed($('#mylog'), e); }
+}
+if (window.authReady) window.authReady.then(loadMyLog); else loadMyLog();
+</script>
+</body>
+</html>

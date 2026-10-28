@@ -1,0 +1,6 @@
+# 影脉 · 运行依赖
+# 安装：python -m pip install -r requirements.txt
+fastapi>=0.115
+uvicorn[standard]>=0.30
+networkx>=3.0
+requests>=2.31

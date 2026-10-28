@@ -1,0 +1,32 @@
+# 凭据 —— 绝对不要提交
+tmdb_apikey.txt
+*.key
+.env
+
+# 数据快照与备份（体积大、可重放）
+# 注意：yingmai.db 故意不排除 —— 它是 4.4MB 的成品数据集，
+# 提交它别人才能 clone 下来直接 python server/app.py 跑起来。
+raw/
+backups/
+*.sqlite
+*.sqlite3
+
+# 草稿区（数据体检报告、种子候选、docx 编辑脚本与备份）
+_work/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# 前端
+node_modules/
+dist/
+
+# 编辑器 / 系统
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini
+~$*

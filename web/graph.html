@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>影脉 · 合作图谱</title>
+<link rel="stylesheet" href="style.css">
+<script src="lib/echarts.min.js"></script>
+<style>
+  .wrap { display: grid; grid-template-columns: 1fr 340px; gap: 14px; }
+  @media (max-width: 980px) { .wrap { grid-template-columns: 1fr; } }
+  .panel { background: var(--surface-1); border: 1px solid var(--hairline);
+           border-radius: 12px; padding: 14px 16px; }
+  .panel h3 { margin: 0 0 10px; font-size: 13.5px; font-weight: 650; }
+  .panel + .panel { margin-top: 12px; }
+  .evi { border-bottom: 1px solid var(--hairline); padding: 7px 0; font-size: 13px; }
+  .evi:last-child { border-bottom: 0; }
+  .evi .t { font-weight: 550; }
+  .evi .m { color: var(--muted); font-size: 12px; }
+  .path { font-size: 13px; padding: 8px 0; border-bottom: 1px solid var(--hairline); }
+  .path:last-child { border-bottom: 0; }
+  .path .step { color: var(--text-secondary); }
+  .path b { color: var(--series-1); }
+</style>
+</head>
+<body>
+<main>
+  <h2 class="sec">合作图谱</h2>
+
+  <!-- 一行筛选器，作用于下面所有图表（不放进单张图里） -->
+  <div class="filters">
+    <div class="field" style="flex:1;min-width:200px">
+      <label for="who">中心人物</label>
+      <input id="who" placeholder="搜索人物，如 梁朝伟" autocomplete="off">
+      <div id="sug"></div>
+    </div>
+    <div class="field"><label for="hops">展开跳数</label>
+      <select id="hops"><option value="1">1 跳（直接合作者）</option>
+        <option value="2" selected>2 跳</option><option value="3">3 跳</option></select></div>
+    <div class="field"><label for="mw">最低合作次数</label>
+      <select id="mw"><option value="1">≥1 部</option><option value="2" selected>≥2 部</option>
+        <option value="3">≥3 部</option><option value="5">≥5 部</option></select></div>
+    <div class="field"><label for="yf">年份</label>
+      <div style="display:flex;gap:6px;align-items:center">
+        <input id="yf" type="number" placeholder="1970" style="width:76px">
+        <span style="color:var(--muted)">–</span>
+        <input id="yt" type="number" placeholder="2026" style="width:76px">
+      </div></div>
+    <button class="primary" id="go">绘制</button>
+  </div>
+
+  <div class="wrap">
+    <div>
+      <div class="card" style="padding:8px">
+        <div id="g" class="chart h620"></div>
+        <div class="legend">
+          <span><i style="background:var(--series-1)"></i>种子人物（八位跨代际演员）</span>
+          <span><i style="background:var(--neutral)"></i>其他人物</span>
+          <span style="color:var(--muted)">节点大小 = 合作者数量　连线粗细 = 共同作品数</span>
+        </div>
+      </div>
+      <details class="tv" id="tv"><summary>表格视图</summary><div id="tvbody"></div></details>
+    </div>
+
+    <div>
+      <div class="panel"><h3>关系证据</h3>
+        <div id="evi"><div class="empty" style="padding:14px">点击图中的连线查看它由哪些作品支撑</div></div></div>
+      <div class="panel"><h3>合作对象排序</h3>
+        <div id="freq" class="chart h340"></div></div>
+      <div class="panel"><h3>关系路径</h3>
+        <div class="field" style="margin-bottom:8px"><input id="to" placeholder="终点人物，如 易烊千玺"></div>
+        <button class="ghost" id="pathGo">查找路径（最多 3 跳）</button>
+        <div id="pathOut"></div></div>
+    </div>
+  </div>
+</main>
+<footer class="foot" id="foot"></footer>
+
+<script src="app.js"></script>
+<script>
+boot('graph.html');
+
+let chart, cur = null, names = {};
+
+const seedIds = new Set();   // 由 stats 的种子信息填充（后端 graph 接口已带 seed 标记）
+async function loadSeedFlag() { /* 由 /api/graph 的节点数据提供 */ }
+
+async function draw() {
+  const kw = $('#who').value.trim();
+  let pid = cur;
+  if (kw && kw !== names[pid]) {
+    const s = await api('/api/search/person', { q: kw, limit: 1 });
+    if (!s.count) { show($('#evi'), '<div class="err">没找到这个人物</div>'); return; }
+    pid = s.results[0].id; names[pid] = s.results[0].name;
+  }
+  cur = pid;
+  $('#g').classList.add('stale');
+  try {
+    const d = await api('/api/graph', {
+      person_id: pid, hops: $('#hops').value, min_weight: $('#mw').value,
+      year_from: $('#yf').value || undefined, year_to: $('#yt').value || undefined, limit: 150,
+    });
+    renderGraph(d);
+    const pid2 = d.focus;
+    if (pid2) {
+      const f = await api('/api/frequency/' + pid2, { limit: 15 });
+      hBar($('#freq'), f.collaborators.map(c => ({ n: c.name, v: c.weight })),
+           { unit: ' 部', digits: 0 });
+    }
+    $('#g').classList.remove('stale');
+  } catch (e) { $('#g').classList.remove('stale'); failed($('#evi'), e); }
+}
+
+function renderGraph(d) {
+  const t = theme();
+  names = Object.fromEntries(d.nodes.map(n => [n.id, n.name]));
+  const maxDeg = Math.max(1, ...d.nodes.map(n => n.degree));
+  const size = n => 8 + 26 * Math.sqrt(n.degree / maxDeg);
+
+  if (chart) chart.dispose();
+  chart = echarts.init($('#g'), null, { renderer: 'canvas' });
+  chart.setOption(baseGrid({
+    tooltip: {
+      formatter: p => p.dataType === 'edge'
+        ? `<b>${esc(names[p.data.source])} × ${esc(names[p.data.target])}</b><br/>共同作品 ${p.data.weight} 部`
+        : `<b>${esc(p.name)}</b><br/>合作者 ${p.data.degree} 位${p.data.seed ? '<br/>种子人物' : ''}`,
+    },
+    legend: { top: 4, left: 6, data: ['种子人物', '其他人物'],
+              textStyle: { color: t.sub, fontSize: 12 }, icon: 'circle',
+              itemWidth: 10, itemHeight: 10 },
+    series: [{
+      type: 'graph', layout: 'force', roam: true, draggable: true,
+      // 给力导向布局圈定范围，右侧留出标签宽度，避免名字被容器裁掉
+      left: 56, top: 42, right: 96, bottom: 36,
+      categories: [{ name: '种子人物' }, { name: '其他人物' }],
+      force: { repulsion: 260, edgeLength: [50, 170], gravity: 0.09,
+               friction: 0.22, layoutAnimation: true },
+      data: d.nodes.map(n => ({
+        id: String(n.id), name: n.name, degree: n.degree, seed: !!n.seed,
+        symbolSize: size(n),
+        category: n.seed ? 0 : 1,
+        itemStyle: { color: n.seed ? t.s1 : t.neutral,
+                     borderColor: t.surface, borderWidth: 2 },  // 2px 表面色环，不是描边分隔
+      })),
+      links: d.edges.map(e => ({
+        source: String(e.source), target: String(e.target), weight: e.weight,
+        lineStyle: { width: 0.5 + Math.min(e.weight, 10) * 0.42, color: t.base, opacity: .45 },
+      })),
+      // 选择性直接标注：只标重要节点，不是每个点都写字
+      label: { show: true, position: 'right', color: t.sub, fontSize: 11,
+               formatter: p => (p.data.symbolSize >= 17 || p.data.seed) ? p.name : '' },
+      // 靠近边缘的标签自动翻到节点另一侧 / 下移，避免被容器裁掉
+      labelLayout: params => {
+        const r = params.rect, W = chart.getWidth(), H = chart.getHeight();
+        const out = { hideOverlap: true };
+        if (r.x + r.width > W - 10) { out.x = r.x - r.width - 54; out.align = 'right'; }
+        if (r.y < 6) out.y = 8;
+        if (r.y + r.height > H - 6) out.y = H - r.height - 8;
+        return out;
+      },
+      emphasis: { focus: 'adjacency',
+                  label: { show: true, fontSize: 12, color: t.ink },
+                  lineStyle: { opacity: .95, width: 2.4 } },
+      lineStyle: { curveness: 0.06 },
+    }],
+  }));
+
+  chart.on('click', async p => {
+    if (p.dataType === 'edge') {
+      const a = +p.data.source, b = +p.data.target;
+      show($('#evi'), '<div class="loading">查询中…</div>');
+      const e = await api(`/api/evidence/${a}/${b}`);
+      show($('#evi'), `<div style="margin-bottom:6px"><b>${esc(names[a])} × ${esc(names[b])}</b>
+        · 共同作品 ${e.count} 部</div>
+        ${e.works.map(w => `<div class="evi"><div class="t">${esc(w.title)}</div>
+          <div class="m">${w.release_year || '年份未知'} · 来源 ${e.source} · 抓取于 ${esc((w.fetched_at || '').slice(0, 10))}</div></div>`).join('')}
+        <p class="hint">${esc(e.note)}</p>`);
+    } else if (p.dataType === 'node') {
+      const n = p.data.name;
+      $('#who').value = n; cur = +p.data.id;
+      location.hash = 'p=' + p.data.id;
+    }
+  });
+
+  $('#tvbody').innerHTML = `<table><thead><tr><th>人物</th><th class="num">合作者数</th><th>是否种子</th></tr></thead>
+    <tbody>${[...d.nodes].sort((a, b) => b.degree - a.degree).map(n =>
+      `<tr><td><a class="link" href="person.html?id=${n.id}">${esc(n.name)}</a></td>
+       <td class="num">${n.degree}</td><td>${n.seed ? '是' : '—'}</td></tr>`).join('')}</tbody></table>`;
+  $('#tv').querySelector('summary').textContent =
+    `表格视图（${d.nodes.length} 节点 / ${d.edges.length} 边${d.truncated ? '，已截断' : ''}）`;
+  $('#foot').textContent = `本平台使用 TMDB 接口数据，但未获 TMDB 认可或认证。合作仅指共同参与作品，不代表私人友谊或直接对手戏。`;
+}
+
+// 搜索建议
+let timer;
+$('#who').addEventListener('input', () => {
+  clearTimeout(timer);
+  const v = $('#who').value.trim();
+  if (v.length < 1) return show($('#sug'), '');
+  timer = setTimeout(async () => {
+    const d = await api('/api/search/person', { q: v, limit: 6 });
+    show($('#sug'), d.results.map(p =>
+      `<div class="tag" style="cursor:pointer;margin:6px 6px 0 0" data-id="${p.id}" data-n="${esc(p.name)}">${esc(p.name)}</div>`).join(''));
+    $$('#sug .tag').forEach(el => el.onclick = () => {
+      $('#who').value = el.dataset.n; cur = +el.dataset.id; show($('#sug'), ''); draw();
+    });
+  }, 220);
+});
+
+$('#go').onclick = draw;
+$('#who').addEventListener('keydown', e => { if (e.key === 'Enter') draw(); });
+
+$('#pathGo').onclick = async () => {
+  const a = cur;
+  const q2 = $('#to').value.trim();
+  if (!a || !q2) return show($('#pathOut'), '<div class="err">先选中心人物，再填终点人物</div>');
+  show($('#pathOut'), '<div class="loading">查找中…</div>');
+  try {
+    const s = await api('/api/search/person', { q: q2, limit: 1 });
+    if (!s.count) return show($('#pathOut'), '<div class="err">没找到终点人物</div>');
+    const d = await api('/api/path', { a, b: s.results[0].id, max_hops: 3, k: 3 });
+    if (!d.found) return show($('#pathOut'), `<p class="hint">${esc(d.note)}</p>`);
+    show($('#pathOut'), d.paths.map(p => `
+      <div class="path"><b>${p.hops} 跳</b>
+        <div class="step">${p.nodes.map(esc).join(' → ')}</div>
+        ${p.edges.map(e => `<div class="m" style="color:var(--muted);font-size:12px">
+          ${esc(e.from)} — ${esc(e.to)}：${e.works.slice(0, 4).map(w => esc(w.title) + (w.release_year ? `(${w.release_year})` : '')).join('、')}
+          ${e.works.length > 4 ? ` 等 ${e.works.length} 部` : ''}</div>`).join('')}
+      </div>`).join(''));
+  } catch (e) { failed($('#pathOut'), e); }
+};
+
+// 支持 ?id= 与 #p= 直达
+const urlId = new URLSearchParams(location.search).get('id');
+const hashId = (location.hash.match(/p=(\d+)/) || [])[1];
+if (urlId || hashId) { cur = +(urlId || hashId); }
+(async () => {
+  if (cur) {
+    const p = await api('/api/person/' + cur);
+    $('#who').value = p.person.name;
+    draw();
+  } else {
+    // 默认从度数最高的人物开图
+    const s = await api('/api/betweenness', { min_weight: 2, top: 1 });
+    if (s.betweenness.length) { cur = s.betweenness[0].id; $('#who').value = s.betweenness[0].name; }
+    draw();
+  }
+})();
+</script>
+</body>
+</html>

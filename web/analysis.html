@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>影脉 · 分析发现</title>
+<link rel="stylesheet" href="style.css">
+<script src="lib/echarts.min.js"></script>
+<style>
+  .comm { border: 1px solid var(--hairline); border-radius: 10px; padding: 11px 13px;
+          background: var(--surface-1); }
+  .comm .hd { display: flex; align-items: baseline; gap: 8px; margin-bottom: 6px; }
+  .comm .sz { margin-left: auto; color: var(--muted); font-size: 12.5px; }
+  .comm .mem { color: var(--text-secondary); font-size: 13px; }
+</style>
+</head>
+<body>
+<main>
+  <h2 class="sec">连接人物分析</h2>
+  <p class="hint">中介中心性表示该人物在样本网络中连接不同群体的程度，<b>不代表行业地位</b>。</p>
+  <div class="card"><div id="btw" class="chart h460"></div>
+    <details class="tv" id="btwtv"><summary>表格视图</summary><div id="btwtvb"></div></details></div>
+
+  <h2 class="sec">合作群体</h2>
+  <p class="hint">按合作边聚类（加权模块度）。群体由样本内的合作边得到，只反映当前样本范围。</p>
+  <div class="filters">
+    <div class="field"><label for="cmw">最低合作次数</label>
+      <select id="cmw"><option value="2">≥2 部</option><option value="3" selected>≥3 部</option>
+        <option value="5">≥5 部</option></select></div>
+    <button class="primary" id="crefresh">重新聚类</button>
+  </div>
+  <div class="grid c3" id="comms"></div>
+
+  <h2 class="sec">人物合作对比</h2>
+  <div class="filters">
+    <div class="field" style="flex:1;min-width:180px"><label for="pa">人物 A</label>
+      <input id="pa" placeholder="如 梁朝伟" autocomplete="off"></div>
+    <div class="field" style="flex:1;min-width:180px"><label for="pb">人物 B</label>
+      <input id="pb" placeholder="如 张曼玉" autocomplete="off"></div>
+    <button class="primary" id="cmp">对比</button>
+  </div>
+  <div class="card"><div id="cmpOut"><div class="empty">输入两个人物姓名开始对比</div></div></div>
+</main>
+<footer class="foot" id="foot"></footer>
+
+<script src="app.js"></script>
+<script>
+boot('analysis.html');
+$('#foot').textContent = '本平台使用 TMDB 接口数据，但未获 TMDB 认可或认证。合作仅指共同参与作品，不代表私人友谊或直接对手戏。';
+
+// ---- F15 连接人物（emphasis：前 3 名用主色，其余中性灰） ----
+(async () => {
+  try {
+    const d = await api('/api/betweenness', { min_weight: 2, top: 20 });
+    hBar($('#btw'), d.betweenness.map(x => ({ n: x.name, v: x.score, degree: x.degree })),
+         { highlightTop: 3, digits: 3 });
+    $('#btwtv').querySelector('summary').textContent =
+      `表格视图（图 ${d.nodes} 节点 / ${d.edges} 边 · ${d.algorithm}）`;
+    $('#btwtvb').innerHTML = `<table><thead><tr><th>人物</th><th class="num">中介中心性</th><th class="num">合作者数</th></tr></thead>
+      <tbody>${d.betweenness.map(x => `<tr><td><a class="link" href="person.html?id=${x.id}">${esc(x.name)}</a></td>
+        <td class="num">${x.score.toFixed(4)}</td><td class="num">${x.degree}</td></tr>`).join('')}</tbody></table>
+      <p class="hint">${esc(d.note)}</p>`;
+  } catch (e) { failed($('#btw'), e); }
+})();
+
+// ---- F14 合作群体（类别多 → 用卡片/表格，不上更多颜色） ----
+async function loadComms() {
+  loading($('#comms'));
+  try {
+    const d = await api('/api/communities', { min_weight: $('#cmw').value, top: 12 });
+    $('#comms').innerHTML = d.communities.map(c => `
+      <div class="comm">
+        <div class="hd"><b>群体 ${c.id + 1}</b><span class="sz">${c.size} 人</span></div>
+        <div class="mem">${c.core.map(x =>
+          `<a class="link" href="person.html?id=${x.id}">${esc(x.name)}</a>`).join('、')}
+          ${c.size > c.core.length ? ` 等 ${c.size} 人` : ''}</div>
+      </div>`).join('');
+  } catch (e) { failed($('#comms'), e); }
+}
+$('#crefresh').onclick = loadComms;
+loadComms();
+
+// ---- F16 人物合作对比 ----
+async function who(v) {
+  const d = await api('/api/search/person', { q: v, limit: 1 });
+  return d.count ? d.results[0] : null;
+}
+
+$('#cmp').onclick = async () => {
+  const a = $('#pa').value.trim(), b = $('#pb').value.trim();
+  if (!a || !b) return;
+  loading($('#cmpOut'));
+  try {
+    const [x, y] = await Promise.all([who(a), who(b)]);
+    if (!x || !y) return show($('#cmpOut'), '<div class="err">没找到其中一个人物</div>');
+    const d = await api(`/api/compare/${x.id}/${y.id}`);
+    const genres = [...new Set([...d.a.genres, ...d.b.genres].map(g => g[0]))].slice(0, 10);
+    const gv = (p, g) => (p.genres.find(z => z[0] === g) || [0, 0])[1];
+
+    show($('#cmpOut'), `
+      <div class="kpis" style="margin-bottom:14px">
+        ${[['a', d.a], ['b', d.b]].map(([k, p]) => `
+          <div class="kpi"><div class="v" style="font-size:20px">${esc(p.name)}</div>
+          <div class="k">${p.works} 部作品 · ${p.collaborators} 位合作者 · ${p.year_from || '—'}–${p.year_to || '—'}</div></div>`).join('')}
+        <div class="kpi"><div class="v">${d.common_works.length}</div><div class="k">部共同作品</div></div>
+      </div>
+      <div id="cmpChart" class="chart h340"></div>
+      <div class="legend">
+        <span><i style="background:var(--series-1)"></i>${esc(d.a.name)}</span>
+        <span><i style="background:var(--series-2)"></i>${esc(d.b.name)}</span>
+      </div>
+      <details class="tv"><summary>共同作品（${d.common_works.length} 部）</summary>
+        <table><thead><tr><th>片名</th><th>年份</th></tr></thead><tbody>
+        ${d.common_works.map(w => `<tr><td><a class="link" href="movie.html?id=${w.id}">${esc(w.title)}</a></td>
+          <td>${w.release_year || '—'}</td></tr>`).join('')}</tbody></table></details>`);
+
+    groupedBar($('#cmpChart'), genres, [
+      { name: d.a.name, data: genres.map(g => gv(d.a, g)) },
+      { name: d.b.name, data: genres.map(g => gv(d.b, g)) },
+    ]);
+  } catch (e) { failed($('#cmpOut'), e); }
+};
+</script>
+</body>
+</html>

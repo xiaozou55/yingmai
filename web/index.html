@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>影脉 · 概览与检索</title>
+<link rel="stylesheet" href="style.css">
+<script src="lib/echarts.min.js"></script>
+</head>
+<body>
+<main>
+  <h2 class="sec">数据概览</h2>
+  <div class="kpis" id="kpis"></div>
+  <p class="hint" id="scope"></p>
+
+  <h2 class="sec">检索</h2>
+  <div class="filters">
+    <div class="field" style="flex:1;min-width:220px">
+      <label for="q">关键词</label>
+      <input id="q" placeholder="输入人物姓名（如 梁朝伟）或片名（如 花样年华）" autocomplete="off">
+    </div>
+    <div class="field">
+      <label for="kind">检索对象</label>
+      <select id="kind">
+        <option value="person">人物</option>
+        <option value="movie">作品</option>
+      </select>
+    </div>
+    <div class="field" id="yearWrap" style="display:none">
+      <label for="yfrom">年份范围</label>
+      <div style="display:flex;gap:6px;align-items:center">
+        <input id="yfrom" type="number" placeholder="1970" style="width:82px">
+        <span style="color:var(--muted)">–</span>
+        <input id="yto" type="number" placeholder="2026" style="width:82px">
+      </div>
+    </div>
+    <button class="primary" id="go">检索</button>
+  </div>
+  <div class="card"><div id="out"><div class="empty">输入关键词开始检索。人物按合作者数量排序，作品按种子命中数与热度排序。</div></div></div>
+</main>
+<footer class="foot" id="foot"></footer>
+
+<script src="app.js"></script>
+<script>
+boot('index.html');
+
+const q = $('#q'), kind = $('#kind'), out = $('#out'), yearWrap = $('#yearWrap');
+
+api('/api/stats').then(s => {
+  $('#kpis').innerHTML = [
+    [s.movies, '部华语电影'], [s.persons, '位人物'], [s.credits, '条演职员记录'],
+    [s.graph_nodes, '个图谱节点'], [s.graph_edges, '条合作边'],
+    [`${s.year_min}–${s.year_max}`, '年份跨度'],
+  ].map(([v, k]) => `<div class="kpi"><div class="v">${v}</div><div class="k">${k}</div></div>`).join('');
+  $('#scope').textContent = `数据来源 ${s.source}　·　范围：${s.scope}`;
+  $('#foot').textContent = `本平台使用 TMDB 接口数据，但未获 TMDB 认可或认证。合作仅指共同参与作品，不代表私人友谊或直接对手戏。`;
+}).catch(e => failed($('#kpis'), e));
+
+kind.onchange = () => { yearWrap.style.display = kind.value === 'movie' ? '' : 'none'; };
+
+async function run() {
+  const kw = q.value.trim();
+  if (!kw) return;
+  loading(out);
+  try {
+    if (kind.value === 'person') {
+      const d = await api('/api/search/person', { q: kw, limit: 30 });
+      if (!d.count) return show(out, `<div class="empty">没找到与「${esc(kw)}」相关的人物。</div>`);
+      show(out, `<div class="results">${d.results.map(p => `
+        <a class="hit" href="person.html?id=${p.id}">
+          ${p.profile_path ? `<img class="avatar" src="${profile(p.profile_path)}" alt="">` : '<div class="avatar"></div>'}
+          <div>
+            <div class="name">${esc(p.name)}</div>
+            <div class="meta">${esc(p.dept || '')}${p.birthday ? ' · ' + p.birthday : ''}${p.place_of_birth ? ' · ' + esc(p.place_of_birth) : ''}</div>
+            ${p.aka?.length ? `<div class="meta">别名：${p.aka.map(esc).join('、')}</div>` : ''}
+          </div>
+          <div class="spacer">${p.id ? '' : ''}</div>
+        </a>`).join('')}</div>
+        <details class="tv"><summary>表格视图（${d.count} 条）</summary>
+          <table><thead><tr><th>姓名</th><th>部门</th><th>生日</th><th>出生地</th><th>别名</th></tr></thead>
+          <tbody>${d.results.map(p => `<tr><td><a class="link" href="person.html?id=${p.id}">${esc(p.name)}</a></td>
+            <td>${esc(p.dept || '—')}</td><td>${esc(p.birthday || '—')}</td>
+            <td>${esc(p.place_of_birth || '—')}</td><td>${(p.aka || []).map(esc).join('、') || '—'}</td></tr>`).join('')}
+          </tbody></table></details>`);
+    } else {
+      const d = await api('/api/search/movie', {
+        q: kw, year_from: $('#yfrom').value || undefined, year_to: $('#yto').value || undefined, limit: 40,
+      });
+      if (!d.count) return show(out, `<div class="empty">没找到与「${esc(kw)}」相关的作品。</div>`);
+      show(out, `<div class="results">${d.results.map(m => `
+        <a class="hit" href="movie.html?id=${m.id}">
+          ${m.poster_path ? `<img class="avatar" src="${poster(m.poster_path)}" alt="">` : '<div class="avatar"></div>'}
+          <div>
+            <div class="name">${esc(m.title)}</div>
+            <div class="meta">${m.release_year || '年份未知'}${m.runtime ? ' · ' + m.runtime + ' 分钟' : ''} · ${m.genres.join('、') || '类型未知'}</div>
+            <div class="meta">${m.original_title && m.original_title !== m.title ? esc(m.original_title) + ' · ' : ''}${m.original_language === 'cn' ? '粤语' : m.original_language === 'zh' ? '国语' : m.original_language}</div>
+          </div>
+          <div class="spacer">${m.seed_hits} 粒种子出演</div>
+        </a>`).join('')}</div>
+        <details class="tv"><summary>表格视图（${d.count} 部）</summary>
+          <table><thead><tr><th>片名</th><th>年份</th><th>类型</th><th class="num">评价数</th><th class="num">种子命中</th></tr></thead>
+          <tbody>${d.results.map(m => `<tr><td><a class="link" href="movie.html?id=${m.id}">${esc(m.title)}</a></td>
+            <td>${m.release_year || '—'}</td><td>${m.genres.join('、') || '—'}</td>
+            <td class="num">${m.vote_count ?? '—'}</td><td class="num">${m.seed_hits}</td></tr>`).join('')}
+          </tbody></table></details>`);
+    }
+  } catch (e) { failed(out, e); }
+}
+
+$('#go').onclick = run;
+q.addEventListener('keydown', e => { if (e.key === 'Enter') run(); });
+q.focus();
+</script>
+</body>
+</html>
